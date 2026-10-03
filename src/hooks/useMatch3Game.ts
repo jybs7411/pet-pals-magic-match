@@ -20,7 +20,7 @@ import {
   clearMatches,
   applyGravityAndRefill,
   hasPossibleMoves,
-  findFirstAvailableMove,
+  findBestMove,
   shuffleBoard,
   cloneBoard,
   areAdjacent,
@@ -33,6 +33,14 @@ import {
   calculateTreatDropsFromMatches,
 } from '../engine/sanctuaryEngine';
 import { soundSynthesizer } from '../audio/SoundSynthesizer';
+import {
+  getLevelConfig,
+  leftoverMovesBonus,
+  starsAwardedForVictory,
+} from '../engine/progression';
+import { loadProgress, saveProgress } from '../storage/progressStore';
+import { PROGRESS_VERSION } from '../storage/progressSchema';
+import { haptics } from '../utils/haptics';
 
 const PRAISE_MESSAGES = [
   'Sweet! 🐾',
@@ -42,7 +50,21 @@ const PRAISE_MESSAGES = [
   'Magic Star Rush! ✨',
 ];
 
+export interface VictoryInfo {
+  bonusPoints: number;
+  starsEarned: number;
+}
+
 export function useMatch3Game() {
+  const [level, setLevel] = useState<number>(1);
+  const [unlockedLevel, setUnlockedLevel] = useState<number>(1);
+  const [bestScore, setBestScore] = useState<number>(0);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [victoryInfo, setVictoryInfo] = useState<VictoryInfo>({ bonusPoints: 0, starsEarned: 0 });
+  const levelConfig = getLevelConfig(level);
+  const levelConfigRef = useRef(levelConfig);
+  levelConfigRef.current = levelConfig;
+
   const [board, setBoard] = useState<BoardGrid>(() => createInitialBoard());
   const [selectedPos, setSelectedPos] = useState<Position | null>(null);
   const [matchedPosKeys, setMatchedPosKeys] = useState<Set<string>>(new Set());
@@ -61,7 +83,6 @@ export function useMatch3Game() {
   const [starsCount, setStarsCount] = useState<number>(3); // 3 starting stars to try wardrobe!
   const [currentHat, setCurrentHat] = useState<PetHat>('wizard');
   const [currentAccessory, setCurrentAccessory] = useState<PetAccessory>('bow');
-  const [hasUsedRescue, setHasUsedRescue] = useState<boolean>(false);
 
   // Emotional Companion Pet Sanctuary State (Barnaby the Bear Cub)
   const [sanctuaryState, setSanctuaryState] = useState<PetSanctuaryState>(() =>
@@ -70,10 +91,37 @@ export function useMatch3Game() {
   const sanctuaryStateRef = useRef<PetSanctuaryState>(sanctuaryState);
   const [isSanctuaryOpen, setIsSanctuaryOpen] = useState(false);
 
-  const isResolvingRef = useRef(false);
+  // Synchronous mirrors of game state. Async cascades must read these (not stale
+  // closures) and must never trigger side effects from inside state updaters.
+  const movesRef = useRef(GAME_RULES.DEFAULT_MOVES);
+  const scoreRef = useRef(0);
+  const hasUsedRescueRef = useRef(false);
+  /** Input/animation lock, set synchronously so double taps can't start two swaps. */
+  const busyRef = useRef(false);
+  /** Bumped on restart/level change/unmount so in-flight cascades abandon themselves. */
+  const runIdRef = useRef(0);
+  const mountedRef = useRef(true);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const isRunAlive = (runId: number) => mountedRef.current && runIdRef.current === runId;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      runIdRef.current += 1;
+    };
+  }, []);
+
+  const applyMoves = (n: number) => {
+    movesRef.current = n;
+    setMoves(n);
+  };
+  const addScore = (n: number) => {
+    scoreRef.current += n;
+    setScore(scoreRef.current);
+  };
 
   // Reset 4-second idle hint timer
   const resetIdleTimer = useCallback(() => {
@@ -83,9 +131,9 @@ export function useMatch3Game() {
     }
     setHintPositions(null);
 
-    if (gameStatus === 'idle' && !isResolvingRef.current) {
+    if (gameStatus === 'idle' && !busyRef.current) {
       idleTimerRef.current = setTimeout(() => {
-        const hint = findFirstAvailableMove(board);
+        const hint = findBestMove(board);
         if (hint) {
           setHintPositions(hint);
           setMascotMessage('Psst! Look where the sparkles are! ✨');
@@ -102,11 +150,70 @@ export function useMatch3Game() {
   }, [resetIdleTimer]);
 
   /**
-   * Cascade loop with child-friendly animal animations
+   * Decides what happens once a turn has fully settled: victory (as soon as the
+   * goal is reached, cashing in leftover moves), a one-time rescue boost, game
+   * over, or back to idle. Runs once per turn, outside any state updater.
+   */
+  const resolveTurnEnd = () => {
+    const cfg = levelConfigRef.current;
+    const movesLeft = movesRef.current;
+
+    if (scoreRef.current >= cfg.targetScore) {
+      const bonusPoints = leftoverMovesBonus(movesLeft);
+      if (bonusPoints > 0) addScore(bonusPoints);
+      const finalScore = scoreRef.current;
+      const starsEarned = starsAwardedForVictory(finalScore, cfg.starThresholds);
+
+      setVictoryInfo({ bonusPoints, starsEarned });
+      setStarsCount((prev) => prev + starsEarned);
+      setBestScore((prev) => Math.max(prev, finalScore));
+      setUnlockedLevel((prev) => Math.max(prev, cfg.level + 1));
+      setGameStatus('victory');
+      setMascotMessage(
+        bonusPoints > 0
+          ? `PAWSOME VICTORY! ${movesLeft} spare moves = +${bonusPoints} bonus! 🏆⭐`
+          : `PAWSOME VICTORY! You won ${starsEarned} bonus star${starsEarned > 1 ? 's' : ''}! 🏆⭐`
+      );
+      soundSynthesizer.playVictory();
+      haptics.success();
+      return;
+    }
+
+    if (movesLeft <= 0) {
+      if (!hasUsedRescueRef.current) {
+        hasUsedRescueRef.current = true;
+        applyMoves(GAME_RULES.RESCUE_MOVES);
+        setMascotMessage(`Magic Paw Boost! 🐾✨ Here are +${GAME_RULES.RESCUE_MOVES} extra moves!`);
+        soundSynthesizer.playRescueBoost();
+        haptics.success();
+        setGameStatus('idle');
+        return;
+      }
+      setBestScore((prev) => Math.max(prev, scoreRef.current));
+      setGameStatus('game_over');
+      setMascotMessage('Great try! Tap retry to play with your friends again! 💖');
+      return;
+    }
+
+    setGameStatus('idle');
+    if (movesLeft <= 5) {
+      setMascotMessage(`Only ${movesLeft} moves left! Aim for big combos! 🐾`);
+    } else {
+      setMascotMessage('Great move! Select your next friend. 🦊🐼');
+    }
+  };
+
+  /**
+   * Cascade loop with child-friendly animal animations.
+   * Abandons silently (without touching state) if a restart or unmount supersedes it.
    */
   const processCascades = useCallback(
-    async (initialBoard: BoardGrid, userMovePos?: Position) => {
-      isResolvingRef.current = true;
+    async (initialBoard: BoardGrid, runId: number, userMovePos?: Position) => {
+      const pause = async (ms: number) => {
+        await sleep(ms);
+        return isRunAlive(runId);
+      };
+
       setGameStatus('clearing');
       setHintPositions(null);
 
@@ -123,6 +230,7 @@ export function useMatch3Game() {
         setCombo(currentCombo);
         setIsCelebrating(true);
         soundSynthesizer.playMatch(currentCombo);
+        haptics.match(currentCombo);
 
         if (currentCombo >= 2) {
           const praise = PRAISE_MESSAGES[Math.min(currentCombo - 2, PRAISE_MESSAGES.length - 1)];
@@ -137,7 +245,7 @@ export function useMatch3Game() {
           matchResult.matchedPositions.map((p) => `${p.row},${p.col}`)
         );
         setMatchedPosKeys(keys);
-        await sleep(240);
+        if (!(await pause(240))) return;
 
         // 2. Clear matches and specials
         const clearRes = clearMatches(
@@ -174,6 +282,7 @@ export function useMatch3Game() {
             }
           }
 
+          haptics.blast();
           if (hasExplosion) {
             soundSynthesizer.playExplosionPunch(maxIntensity);
           }
@@ -216,10 +325,9 @@ export function useMatch3Game() {
 
         // Score with combo multiplier
         const comboMultiplier = 1 + (currentCombo - 1) * 0.5;
-        const stepScore = Math.round(clearRes.score * comboMultiplier);
-        setScore((prev) => prev + stepScore);
+        addScore(Math.round(clearRes.score * comboMultiplier));
 
-        await sleep(160);
+        if (!(await pause(160))) return;
 
         // 3. Gravity and Refill
         setGameStatus('falling');
@@ -227,13 +335,13 @@ export function useMatch3Game() {
         currentBoard = gravityRes.newBoard;
         setBoard(cloneBoard(currentBoard));
 
-        await sleep(240);
+        if (!(await pause(240))) return;
       }
 
       // Check if board has possible moves left
       if (!hasPossibleMoves(currentBoard)) {
         setMascotMessage('Animals need room to play! Shuffling... 🔄');
-        await sleep(700);
+        if (!(await pause(700))) return;
         currentBoard = shuffleBoard(currentBoard);
         setBoard(cloneBoard(currentBoard));
         setMascotMessage('All ready! Pick your next friend! 🐾');
@@ -242,46 +350,12 @@ export function useMatch3Game() {
       setCombo(0);
       setIsCelebrating(false);
       setPraiseMessage(null);
-      isResolvingRef.current = false;
+      busyRef.current = false;
 
-      // Check game end conditions
-      setMoves((currentMoves) => {
-        if (currentMoves <= 0) {
-          // Check if child gets friendly rescue boost
-          if (!hasUsedRescue) {
-            setHasUsedRescue(true);
-            const rescueMoves = GAME_RULES.RESCUE_MOVES;
-            setMascotMessage('Magic Paw Boost! 🐾✨ Here are +5 extra moves!');
-            soundSynthesizer.playRescueBoost();
-            setGameStatus('idle');
-            return rescueMoves;
-          }
-
-          setScore((currentFinalScore) => {
-            if (currentFinalScore >= GAME_RULES.TARGET_SCORE) {
-              setGameStatus('victory');
-              setStarsCount((prev) => prev + 2); // Award stars to spend in closet!
-              setMascotMessage('PAWSOME VICTORY! You won 2 bonus stars! 🏆⭐');
-              soundSynthesizer.playVictory();
-            } else {
-              setGameStatus('game_over');
-              setMascotMessage('Great try! Tap retry to play with your friends again! 💖');
-            }
-            return currentFinalScore;
-          });
-          return 0;
-        } else {
-          setGameStatus('idle');
-          if (currentMoves <= 5) {
-            setMascotMessage(`Only ${currentMoves} moves left! Aim for big combos! 🐾`);
-          } else {
-            setMascotMessage('Great move! Select your next friend. 🦊🐼');
-          }
-          return currentMoves;
-        }
-      });
+      resolveTurnEnd();
     },
-    [hasUsedRescue]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
   );
 
   /**
@@ -289,7 +363,7 @@ export function useMatch3Game() {
    */
   const executeSwap = useCallback(
     async (posA: Position, posB: Position) => {
-      if (isResolvingRef.current || gameStatus !== 'idle') return;
+      if (busyRef.current || gameStatus !== 'idle') return;
 
       if (!areAdjacent(posA, posB)) {
         setSelectedPos(posB);
@@ -297,6 +371,14 @@ export function useMatch3Game() {
         resetIdleTimer();
         return;
       }
+
+      // Lock synchronously so a duplicate touch/press event can't start a second swap.
+      busyRef.current = true;
+      const runId = runIdRef.current;
+      const pause = async (ms: number) => {
+        await sleep(ms);
+        return isRunAlive(runId);
+      };
 
       const valid = isValidSwap(board, posA, posB);
 
@@ -310,14 +392,15 @@ export function useMatch3Game() {
         tempBoard[posB.row][posB.col] = { ...tA, row: posB.row, col: posB.col };
         setBoard(tempBoard);
 
+        haptics.bump();
         setMascotMessage('No match there! Match 3 of the same friends! 🔄');
-        await sleep(200);
+        if (!(await pause(200))) return;
 
         // Revert back
         setBoard(cloneBoard(board));
         setSelectedPos(null);
         setGameStatus('idle');
-        resetIdleTimer();
+        busyRef.current = false;
         return;
       }
 
@@ -325,7 +408,7 @@ export function useMatch3Game() {
       setSelectedPos(null);
       setGameStatus('swapping');
       setHintPositions(null);
-      setMoves((prev) => Math.max(0, prev - 1));
+      applyMoves(Math.max(0, movesRef.current - 1));
 
       // Special combos
       const specialCombo = resolveSpecialSwap(board, posA, posB);
@@ -337,6 +420,7 @@ export function useMatch3Game() {
         // Deep satisfying resonant explosion thump combined with celebratory fanfare
         soundSynthesizer.playExplosionPunch(1.8);
         soundSynthesizer.playSpecialBlast();
+        haptics.blast();
 
         if (tileA?.special === 'bee_copter' || tileB?.special === 'bee_copter') {
           soundSynthesizer.playBeeCopter();
@@ -354,19 +438,19 @@ export function useMatch3Game() {
           specialCombo.clearedPositions.map((p) => `${p.row},${p.col}`)
         );
         setMatchedPosKeys(keys);
-        await sleep(300);
+        if (!(await pause(300))) return;
 
         setBoard(cloneBoard(specialCombo.newBoard));
         setMatchedPosKeys(new Set());
-        setScore((prev) => prev + specialCombo.score);
+        addScore(specialCombo.score);
 
-        await sleep(180);
+        if (!(await pause(180))) return;
         setGameStatus('falling');
         const gravityRes = applyGravityAndRefill(specialCombo.newBoard);
         setBoard(cloneBoard(gravityRes.newBoard));
-        await sleep(250);
+        if (!(await pause(250))) return;
 
-        await processCascades(gravityRes.newBoard, posB);
+        await processCascades(gravityRes.newBoard, runId, posB);
         return;
       }
 
@@ -379,18 +463,19 @@ export function useMatch3Game() {
       newBoard[posB.row][posB.col] = { ...tileA, row: posB.row, col: posB.col };
 
       setBoard(cloneBoard(newBoard));
-      await sleep(160);
+      if (!(await pause(160))) return;
 
-      await processCascades(newBoard, posB);
+      await processCascades(newBoard, runId, posB);
     },
     [board, gameStatus, processCascades, resetIdleTimer]
   );
 
   const handleTilePress = useCallback(
     (row: number, col: number) => {
-      if (isResolvingRef.current || gameStatus !== 'idle') return;
+      if (busyRef.current || gameStatus !== 'idle') return;
       resetIdleTimer();
       soundSynthesizer.playTap();
+      haptics.tap();
 
       if (!selectedPos) {
         setSelectedPos({ row, col });
@@ -409,7 +494,7 @@ export function useMatch3Game() {
 
   const handleSwipe = useCallback(
     (row: number, col: number, direction: 'up' | 'down' | 'left' | 'right') => {
-      if (isResolvingRef.current || gameStatus !== 'idle') return;
+      if (busyRef.current || gameStatus !== 'idle') return;
       resetIdleTimer();
 
       let targetRow = row;
@@ -432,54 +517,112 @@ export function useMatch3Game() {
     [gameStatus, executeSwap, resetIdleTimer]
   );
 
-  const restartGame = useCallback(() => {
-    soundSynthesizer.playTap();
-    isResolvingRef.current = false;
+  /** Starts a fresh round of the given level, cancelling any cascade in flight. */
+  const startLevel = useCallback((targetLevel: number, message: string) => {
+    const cfg = getLevelConfig(targetLevel);
+    runIdRef.current += 1;
+    busyRef.current = false;
+    hasUsedRescueRef.current = false;
+    scoreRef.current = 0;
+    movesRef.current = cfg.moves;
+
+    setLevel(cfg.level);
     setBoard(createInitialBoard());
     setSelectedPos(null);
     setMatchedPosKeys(new Set());
     setHintPositions(null);
-    setMoves(GAME_RULES.DEFAULT_MOVES);
+    setMoves(cfg.moves);
     setScore(0);
     setCombo(0);
     setPraiseMessage(null);
     setIsCelebrating(false);
-    setHasUsedRescue(false);
+    setVictoryInfo({ bonusPoints: 0, starsEarned: 0 });
     setGameStatus('idle');
-    setMascotMessage('Fresh animal meadow! Make your first move! 🦊');
+    setMascotMessage(message);
   }, []);
+
+  const restartGame = useCallback(() => {
+    soundSynthesizer.playTap();
+    startLevel(levelConfigRef.current.level, 'Fresh animal meadow! Make your first move! 🦊');
+  }, [startLevel]);
+
+  const nextLevel = useCallback(() => {
+    soundSynthesizer.playTap();
+    const next = levelConfigRef.current.level + 1;
+    startLevel(next, `Level ${next}! The meadow is bigger and brighter. Let's go! 🌈`);
+  }, [startLevel]);
 
   // Feed Barnaby with collected treats from the metagame inventory
   const feedBarnaby = useCallback((treatType: TreatType) => {
-    setSanctuaryState((prev) => {
-      const res = feedBarnabyInState(prev, treatType);
-      if (res.success) {
-        setMascotMessage(res.message);
-        if (res.leveledUp) {
-          setIsCelebrating(true);
-          setStarsCount((prevStars) => prevStars + 2); // Award bonus stars to spend on hats/capes!
-          setTimeout(() => setIsCelebrating(false), 2000);
-        }
+    const res = feedBarnabyInState(sanctuaryStateRef.current, treatType);
+    sanctuaryStateRef.current = res.newState;
+    setSanctuaryState(res.newState);
+    if (res.success) {
+      setMascotMessage(res.message);
+      if (res.leveledUp) {
+        setIsCelebrating(true);
+        setStarsCount((prevStars) => prevStars + 2); // Award bonus stars to spend on hats/capes!
+        setTimeout(() => setIsCelebrating(false), 2000);
       }
-      sanctuaryStateRef.current = res.newState;
-      return res.newState;
-    });
+    }
   }, []);
 
   // Pet or tickle Barnaby the Bear Cub
   const petBarnaby = useCallback(() => {
-    setSanctuaryState((prev) => {
-      const res = petBarnabyInState(prev);
-      setMascotMessage(res.message);
-      if (res.leveledUp) {
-        setIsCelebrating(true);
-        setStarsCount((prevStars) => prevStars + 2);
-        setTimeout(() => setIsCelebrating(false), 2000);
-      }
-      sanctuaryStateRef.current = res.newState;
-      return res.newState;
-    });
+    const res = petBarnabyInState(sanctuaryStateRef.current);
+    sanctuaryStateRef.current = res.newState;
+    setSanctuaryState(res.newState);
+    setMascotMessage(res.message);
+    if (res.leveledUp) {
+      setIsCelebrating(true);
+      setStarsCount((prevStars) => prevStars + 2);
+      setTimeout(() => setIsCelebrating(false), 2000);
+    }
   }, []);
+
+  // Restore saved progress once on launch.
+  useEffect(() => {
+    let cancelled = false;
+    loadProgress().then((saved) => {
+      if (cancelled) return;
+      if (saved) {
+        setStarsCount(saved.starsCount);
+        setCurrentHat(saved.hat);
+        setCurrentAccessory(saved.accessory);
+        setBestScore(saved.bestScore);
+        setUnlockedLevel(saved.level);
+        sanctuaryStateRef.current = saved.sanctuary;
+        setSanctuaryState(saved.sanctuary);
+        // Resume at the highest unlocked level, but never yank a round already in progress.
+        if (saved.level !== levelConfigRef.current.level && scoreRef.current === 0 && !busyRef.current) {
+          startLevel(saved.level, `Welcome back! Ready for level ${saved.level}? 🐾`);
+        } else if (saved.level === 1 && scoreRef.current === 0) {
+          setMascotMessage('Welcome back, friend! Barnaby missed you! 🐻💖');
+        }
+      }
+      setIsHydrated(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [startLevel]);
+
+  // Debounced auto-save of long-term progress (never before hydration finished).
+  useEffect(() => {
+    if (!isHydrated) return;
+    const id = setTimeout(() => {
+      saveProgress({
+        version: PROGRESS_VERSION,
+        starsCount,
+        hat: currentHat,
+        accessory: currentAccessory,
+        level: unlockedLevel,
+        bestScore,
+        sanctuary: sanctuaryState,
+      });
+    }, 400);
+    return () => clearTimeout(id);
+  }, [isHydrated, starsCount, currentHat, currentAccessory, unlockedLevel, bestScore, sanctuaryState]);
 
   return {
     board,
@@ -488,7 +631,12 @@ export function useMatch3Game() {
     hintPositions,
     moves,
     score,
-    targetScore: GAME_RULES.TARGET_SCORE,
+    level,
+    targetScore: levelConfig.targetScore,
+    starThresholds: levelConfig.starThresholds,
+    bestScore,
+    victoryInfo,
+    isHydrated,
     combo,
     gameStatus,
     praiseMessage,
@@ -507,5 +655,6 @@ export function useMatch3Game() {
     handleTilePress,
     handleSwipe,
     restartGame,
+    nextLevel,
   };
 }

@@ -232,7 +232,9 @@ export const CompanionPet: React.FC<CompanionPetProps> = ({
             <Text style={styles.starsCount}>⭐ {starsCount}</Text>
           </View>
         </View>
-        <Text style={styles.messageText}>{message}</Text>
+        <Text style={styles.messageText} accessibilityLiveRegion="polite">
+          {message}
+        </Text>
       </View>
     </View>
   );

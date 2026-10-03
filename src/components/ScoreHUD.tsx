@@ -20,6 +20,9 @@ interface ScoreHUDProps {
   moves: number;
   combo: number;
   praiseMessage: string | null;
+  level?: number;
+  targetScore?: number;
+  starThresholds?: [number, number, number];
 }
 
 /**
@@ -688,8 +691,13 @@ export const ScoreHUD: React.FC<ScoreHUDProps> = ({
   moves,
   combo,
   praiseMessage,
+  level = 1,
+  targetScore = GAME_RULES.TARGET_SCORE,
+  starThresholds = GAME_RULES.STAR_THRESHOLDS as [number, number, number],
 }) => {
-  const [star1, star2, star3] = GAME_RULES.STAR_THRESHOLDS;
+  const [star1, star2, star3] = starThresholds;
+  const progress = Math.min(1, score / Math.max(1, targetScore));
+  const percent = Math.round(progress * 100);
 
   return (
     <View style={styles.hudContainer}>
@@ -704,6 +712,23 @@ export const ScoreHUD: React.FC<ScoreHUDProps> = ({
           star2={star2}
           star3={star3}
         />
+      </View>
+
+      {/* Level goal progress */}
+      <View
+        style={styles.goalWrap}
+        accessible
+        accessibilityRole="progressbar"
+        accessibilityLabel={`Level ${level} goal`}
+        accessibilityValue={{ min: 0, max: 100, now: percent, text: `${percent} percent of ${targetScore} points` }}
+      >
+        <View style={styles.goalHeader}>
+          <Text style={styles.goalLevel}>LEVEL {level}</Text>
+          <Text style={styles.goalTarget}>Goal {targetScore.toLocaleString()} 🏆</Text>
+        </View>
+        <View style={styles.goalTrack}>
+          <View style={[styles.goalFill, { width: `${percent}%` }]} />
+        </View>
       </View>
 
       {/* Floating Combo / Praise Woodland Streamer Banner */}
@@ -726,6 +751,41 @@ export const ScoreHUD: React.FC<ScoreHUDProps> = ({
 // STYLES
 // ============================================================================
 const styles = StyleSheet.create({
+  goalWrap: {
+    width: '100%',
+    maxWidth: 400,
+    marginTop: 6,
+    paddingHorizontal: 6,
+  },
+  goalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 3,
+  },
+  goalLevel: {
+    color: '#8D5B28',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  goalTarget: {
+    color: '#5D4037',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  goalTrack: {
+    height: 10,
+    borderRadius: 6,
+    backgroundColor: 'rgba(93, 64, 55, 0.25)',
+    borderWidth: 1.5,
+    borderColor: '#C28854',
+    overflow: 'hidden',
+  },
+  goalFill: {
+    height: '100%',
+    backgroundColor: '#FFB300',
+    borderRadius: 6,
+  },
   hudContainer: {
     width: '100%',
     maxWidth: 440,

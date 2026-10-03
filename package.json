@@ -4,7 +4,9 @@
   "main": "index.ts",
   "dependencies": {
     "@expo/metro-runtime": "~57.0.16",
+    "@react-native-async-storage/async-storage": "^2.2.0",
     "expo": "~57.0.26",
+    "expo-haptics": "~57.0.3",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -21,7 +23,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "npx tsx src/engine/testEngine.ts && npx tsx src/engine/testJuice.ts && npx tsx src/audio/testSoundSynthesizer.ts"
+    "test": "npx tsx src/engine/testEngine.ts && npx tsx src/engine/testJuice.ts && npx tsx src/engine/testProgression.ts && npx tsx src/audio/testSoundSynthesizer.ts"
   },
   "private": true
 }
