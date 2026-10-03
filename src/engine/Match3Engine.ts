@@ -505,6 +505,47 @@ export function findFirstAvailableMove(
 }
 
 /**
+ * Finds the most rewarding valid swap (most tiles cleared on the first match;
+ * special-tile swaps rank highest). Used for hints so a stuck child is pointed
+ * at a move that actually feels good instead of the first one in reading order.
+ */
+export function findBestMove(board: BoardGrid): [Position, Position] | null {
+  const rows = board.length;
+  const cols = board[0].length;
+  let best: [Position, Position] | null = null;
+  let bestScore = -1;
+
+  const consider = (a: Position, b: Position) => {
+    if (!isValidSwap(board, a, b)) return;
+    const tileA = board[a.row][a.col]!;
+    const tileB = board[b.row][b.col]!;
+    let value: number;
+    if (tileA.special !== 'normal' || tileB.special !== 'normal') {
+      value = 100;
+    } else {
+      const test = cloneBoard(board);
+      test[a.row][a.col] = { ...tileB, row: a.row, col: a.col };
+      test[b.row][b.col] = { ...tileA, row: b.row, col: b.col };
+      value = findMatches(test).matchedPositions.length;
+    }
+    if (value > bestScore) {
+      bestScore = value;
+      best = [a, b];
+    }
+  };
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const here: Position = { row: r, col: c };
+      if (c + 1 < cols) consider(here, { row: r, col: c + 1 });
+      if (r + 1 < rows) consider(here, { row: r + 1, col: c });
+    }
+  }
+
+  return best;
+}
+
+/**
  * Milestone 2: Resolves special candy combinations when directly swapped.
  */
 export function resolveSpecialSwap(
@@ -1160,6 +1201,12 @@ export function shuffleBoard(board: BoardGrid): BoardGrid {
     (findMatches(shuffledBoard).hasMatches || !hasPossibleMoves(shuffledBoard)) &&
     attempts < 30
   );
+
+  // Extremely unlikely, but never hand back a board that is stuck or already
+  // holds matches: fall back to a freshly generated, guaranteed-playable board.
+  if (findMatches(shuffledBoard).hasMatches || !hasPossibleMoves(shuffledBoard)) {
+    return createInitialBoard(rows, cols);
+  }
 
   return shuffledBoard;
 }

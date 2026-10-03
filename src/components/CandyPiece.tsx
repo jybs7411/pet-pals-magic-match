@@ -12,7 +12,7 @@ interface CandyPieceProps {
   isHinted?: boolean;
 }
 
-export const CandyPiece: React.FC<CandyPieceProps> = ({
+const CandyPieceBase: React.FC<CandyPieceProps> = ({
   tile,
   size,
   isSelected = false,
@@ -147,3 +147,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 });
+
+/** Memoised on the visible tile fields so identical clones don't re-render the SVG. */
+export const CandyPiece = React.memo(
+  CandyPieceBase,
+  (prev, next) =>
+    prev.size === next.size &&
+    prev.isSelected === next.isSelected &&
+    prev.isNeighborTarget === next.isNeighborTarget &&
+    prev.isMatched === next.isMatched &&
+    prev.isHinted === next.isHinted &&
+    prev.tile.id === next.tile.id &&
+    prev.tile.color === next.tile.color &&
+    prev.tile.special === next.tile.special &&
+    prev.tile.row === next.tile.row &&
+    prev.tile.col === next.tile.col
+);

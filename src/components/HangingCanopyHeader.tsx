@@ -243,6 +243,7 @@ export const HangingCanopyHeader: React.FC<HangingCanopyHeaderProps> = ({
             style={styles.medallionButton}
             onPress={onToggleMute}
             activeOpacity={0.75}
+            accessibilityRole="button"
             accessibilityLabel={isMuted ? 'Unmute sound' : 'Mute sound'}
           >
             {/* Golden Beveled Wooden Rim */}
@@ -257,7 +258,8 @@ export const HangingCanopyHeader: React.FC<HangingCanopyHeaderProps> = ({
             style={styles.medallionButton}
             onPress={onRestart}
             activeOpacity={0.75}
-            accessibilityLabel="Restart game"
+            accessibilityRole="button"
+            accessibilityLabel="Restart level"
           >
             <View style={styles.medallionFace}>
               <Text style={styles.medallionIcon}>🔄</Text>

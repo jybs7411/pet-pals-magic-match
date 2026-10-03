@@ -97,6 +97,10 @@ export const GAME_RULES = {
   BASE_POINTS_PER_TILE: 60,
   COMBO_BONUS_MULTIPLIER: 1.5,
   IDLE_HINT_DELAY_MS: 4000, // 4 seconds before hinting to help the child
+  LEVEL_TARGET_STEP: 600, // extra goal points per level
+  MAX_TARGET_SCORE: 6000,
+  BONUS_POINTS_PER_LEFTOVER_MOVE: 150,
+  BREAK_REMINDER_MINUTES: 20, // gentle healthy-play nudge
 };
 
 export interface WardrobeItem<T> {

@@ -7,6 +7,7 @@ import {
   StatusBar,
   TouchableOpacity,
   ScrollView,
+  Modal,
 } from 'react-native';
 import { Board } from './src/components/Board';
 import { ScoreHUD } from './src/components/ScoreHUD';
@@ -18,10 +19,14 @@ import { useMatch3Game } from './src/hooks/useMatch3Game';
 import { StorybookMeadow, CarvedWoodFrame } from './src/components/StorybookMeadow';
 import { useSound } from './src/audio/SoundSynthesizer';
 import { HangingCanopyHeader } from './src/components/HangingCanopyHeader';
+import { useReducedMotion } from './src/hooks/useReducedMotion';
+import { usePlayBreakReminder } from './src/hooks/usePlayBreakReminder';
 
 export default function App() {
   const [isWardrobeOpen, setIsWardrobeOpen] = useState(false);
   const { isMuted, toggleMute } = useSound();
+  const reduceMotion = useReducedMotion();
+  const { shouldRemind, dismiss: dismissBreak } = usePlayBreakReminder();
 
   const {
     board,
@@ -30,6 +35,11 @@ export default function App() {
     hintPositions,
     moves,
     score,
+    level,
+    targetScore,
+    starThresholds,
+    bestScore,
+    victoryInfo,
     combo,
     gameStatus,
     praiseMessage,
@@ -48,6 +58,7 @@ export default function App() {
     handleTilePress,
     handleSwipe,
     restartGame,
+    nextLevel,
   } = useMatch3Game();
 
   const isGameOver = gameStatus === 'game_over';
@@ -76,6 +87,9 @@ export default function App() {
               moves={moves}
               combo={combo}
               praiseMessage={praiseMessage}
+              level={level}
+              targetScore={targetScore}
+              starThresholds={starThresholds}
             />
 
             {/* Interactive Companion Pet (Barnaby the Bear Cub) */}
@@ -96,6 +110,8 @@ export default function App() {
               style={styles.sanctuaryBanner}
               onPress={() => setIsSanctuaryOpen(true)}
               activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel={`Open Barnaby's Sanctuary, friendship level ${sanctuaryState.friendshipLevel}`}
             >
               <View style={styles.sanctuaryBannerLeft}>
                 <Text style={styles.sanctuaryBannerIcon}>🏡</Text>
@@ -131,6 +147,7 @@ export default function App() {
                   onSwipe={handleSwipe}
                   disabled={gameStatus !== 'idle'}
                   combo={combo}
+                  reduceMotion={reduceMotion}
                 />
               </CarvedWoodFrame>
             </View>
@@ -197,8 +214,42 @@ export default function App() {
               visible={isGameOver || isVictory}
               isVictory={isVictory}
               score={score}
+              level={level}
+              targetScore={targetScore}
+              starThresholds={starThresholds}
+              bonusPoints={victoryInfo.bonusPoints}
+              bestScore={bestScore}
               onRestart={restartGame}
+              onNextLevel={nextLevel}
             />
+
+            {/* Gentle healthy-play reminder (only between moves) */}
+            <Modal
+              visible={shouldRemind && gameStatus === 'idle' && !isGameOver && !isVictory}
+              transparent
+              animationType="fade"
+              onRequestClose={dismissBreak}
+            >
+              <View style={styles.breakOverlay}>
+                <View style={styles.breakCard}>
+                  <Text style={styles.breakEmoji}>💧🧸</Text>
+                  <Text style={styles.breakTitle}>Time for a little break!</Text>
+                  <Text style={styles.breakText}>
+                    Barnaby wants to stretch and sip some water. You can too! Then come back
+                    and play some more.
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.breakButton}
+                    onPress={dismissBreak}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel="Keep playing"
+                  >
+                    <Text style={styles.breakButtonText}>OK, KEEP PLAYING 🐾</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Modal>
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -207,6 +258,33 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  breakOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(20, 10, 36, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  breakCard: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: '#FFF9E6',
+    borderRadius: 24,
+    borderWidth: 4,
+    borderColor: '#C28854',
+    padding: 22,
+    alignItems: 'center',
+  },
+  breakEmoji: { fontSize: 40, marginBottom: 6 },
+  breakTitle: { color: '#8D5B28', fontSize: 20, fontWeight: '900', marginBottom: 6, textAlign: 'center' },
+  breakText: { color: '#5D4037', fontSize: 14, fontWeight: '700', textAlign: 'center', marginBottom: 16 },
+  breakButton: {
+    backgroundColor: '#FFB300',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+  },
+  breakButtonText: { color: '#4E342E', fontSize: 14, fontWeight: '900' },
   safeArea: {
     flex: 1,
     backgroundColor: 'transparent',

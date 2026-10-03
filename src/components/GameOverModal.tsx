@@ -7,6 +7,12 @@ interface GameOverModalProps {
   isVictory: boolean;
   score: number;
   onRestart: () => void;
+  onNextLevel?: () => void;
+  level?: number;
+  targetScore?: number;
+  starThresholds?: [number, number, number];
+  bonusPoints?: number;
+  bestScore?: number;
 }
 
 export const GameOverModal: React.FC<GameOverModalProps> = ({
@@ -14,8 +20,14 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   isVictory,
   score,
   onRestart,
+  onNextLevel,
+  level = 1,
+  targetScore = GAME_RULES.TARGET_SCORE,
+  starThresholds = GAME_RULES.STAR_THRESHOLDS as [number, number, number],
+  bonusPoints = 0,
+  bestScore = 0,
 }) => {
-  const [star1, star2, star3] = GAME_RULES.STAR_THRESHOLDS;
+  const [star1, star2, star3] = starThresholds;
   const starsCount = score >= star3 ? 3 : score >= star2 ? 2 : score >= star1 ? 1 : 0;
 
   return (
@@ -50,17 +62,39 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
             <Text style={styles.scoreLabel}>PET POINTS</Text>
             <Text style={styles.scoreValue}>{score.toLocaleString()}</Text>
             <Text style={styles.targetLabel}>
-              Goal: {GAME_RULES.TARGET_SCORE.toLocaleString()}
+              Level {level} goal: {targetScore.toLocaleString()}
             </Text>
+            {bonusPoints > 0 && (
+              <Text style={styles.targetLabel}>
+                Includes +{bonusPoints.toLocaleString()} spare-move bonus ✨
+              </Text>
+            )}
+            {bestScore > 0 && (
+              <Text style={styles.targetLabel}>Best: {bestScore.toLocaleString()}</Text>
+            )}
           </View>
 
+          {isVictory && onNextLevel && (
+            <TouchableOpacity
+              style={[styles.button, styles.buttonWin, styles.nextButton]}
+              onPress={onNextLevel}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel={`Go to level ${level + 1}`}
+            >
+              <Text style={styles.buttonText}>NEXT LEVEL ➜ {level + 1}</Text>
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={isVictory ? 'Replay this level' : 'Try this level again'}
             style={[styles.button, isVictory ? styles.buttonWin : styles.buttonTryAgain]}
             onPress={onRestart}
             activeOpacity={0.85}
           >
             <Text style={styles.buttonText}>
-              {isVictory ? 'PLAY AGAIN! 🐾' : 'TRY AGAIN! 🔄'}
+              {isVictory ? 'REPLAY LEVEL 🐾' : 'TRY AGAIN! 🔄'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -70,6 +104,9 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
 };
 
 const styles = StyleSheet.create({
+  nextButton: {
+    marginBottom: 10,
+  },
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(20, 10, 36, 0.85)',
